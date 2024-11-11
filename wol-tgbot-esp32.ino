@@ -7,84 +7,71 @@
 #include "esp_task_wdt.h"
 
 // WiFi
-const char *WIFI_SSID = "XXXXXXXX";
-const char *WIFI_PASSWORD = "XXXXXXXX";
+const char WIFI_SSID[] PROGMEM = "XXXXXXXX";
+const char WIFI_PASSWORD[] PROGMEM = "XXXXXXXX";
 
 // Telegram Bot API
-const char *BOT_TOKEN = "0000000000:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
-const char *BOT_ALLOWED_ID = "0000000000";
+const char BOT_TOKEN[] PROGMEM = "0000000000:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+const char BOT_ALLOWED_ID[] PROGMEM = "0000000000";
 
 // MAC Address of WakeOnLan device
-const char *MAC_ADDR = "XX:XX:XX:XX:XX:XX";
-
-// LED Pin Configuration
-const int WIFI_LED_PIN = LED_BUILTIN; // Built-in LED on most ESP32 dev boards, change if using different pin
+const char MAC_ADDR[] PROGMEM = "XX:XX:XX:XX:XX:XX";
 
 // Constants
-const int WDT_TIMEOUT = 60;               // Watchdog timeout in seconds
-const int WIFI_RETRY_DELAY = 5000;        // WiFi retry delay in milliseconds
-const unsigned long WIFI_TIMEOUT = 20000; // WiFi connection timeout
-const unsigned long BOT_MTBS = 1000;      // mean time between scan messages
+constexpr uint8_t WIFI_LED_PIN = LED_BUILTIN; // Built-in LED on most ESP32 dev boards, change if using different pin
+constexpr uint8_t WDT_TIMEOUT = 60;
+constexpr uint16_t WIFI_RETRY_DELAY = 5000;
+constexpr uint16_t WIFI_TIMEOUT = 20000;
+constexpr uint16_t BOT_MTBS = 1000;
 
-// Global variables
+// Global variables (minimized)
 WiFiClientSecure secured_client;
 UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 WiFiUDP UDP;
 WakeOnLan WOL(UDP);
-unsigned long bot_lasttime = 0;
-unsigned long lastWiFiRetry = 0;
+uint32_t bot_lasttime = 0;
 
-bool setupWiFi()
-{
-  Serial.print("[WiFi] Connecting to ");
+bool setupWiFi() {
+  Serial.print(F("[WiFi] Connecting to "));
   Serial.println(WIFI_SSID);
 
-  // Turn off LED while connecting
-  digitalWrite(WIFI_LED_PIN, LOW);
+  digitalWrite(WIFI_LED_PIN, HIGH);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-  unsigned long startAttemptTime = millis();
-
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - startAttemptTime < WIFI_TIMEOUT)
-  {
+  uint32_t startTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startTime < WIFI_TIMEOUT) {
     Serial.print(".");
     delay(500);
   }
 
-  if (WiFi.status() != WL_CONNECTED)
-  {
-    Serial.println("\nFailed to connect to WiFi");
-    digitalWrite(WIFI_LED_PIN, LOW); // Ensure LED is off if connection fails
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println(F("\nFailed to connect to WiFi"));
     return false;
   }
 
-  Serial.print("\nWiFi connected. IP address: ");
+  Serial.print(F("\nWiFi connected. IP address: "));
   Serial.println(WiFi.localIP());
-  digitalWrite(WIFI_LED_PIN, HIGH); // Turn on LED when connected
+  digitalWrite(WIFI_LED_PIN, LOW);
   return true;
 }
 
-bool setupTime()
-{
-  Serial.print("Retrieving time: ");
+bool setupTime() {
+  Serial.print(F("Retrieving time: "));
   configTime(0, 0, "time.cloudflare.com", "pool.ntp.org");
 
-  unsigned long startAttempt = millis();
   time_t now = time(nullptr);
+  uint32_t startTime = millis();
 
-  while (now < 24 * 3600 && millis() - startAttempt < 10000)
-  {
+  while (now < 24 * 3600 && millis() - startTime < 10000) {
     delay(100);
     Serial.print(".");
     now = time(nullptr);
   }
 
-  if (now < 24 * 3600)
-  {
-    Serial.println("\nFailed to get NTP time");
+  if (now < 24 * 3600) {
+    Serial.println(F("\nFailed to get NTP time"));
     return false;
   }
 
@@ -92,152 +79,110 @@ bool setupTime()
   return true;
 }
 
-void sendWOL()
-{
+void setupWDT() {
+  // Delete any existing watchdog timer first
+  esp_task_wdt_deinit();
+
+  // Initialize Watchdog with new config
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = WDT_TIMEOUT * 1000,
+    .idle_core_mask = (1 << 0),
+    .trigger_panic = true
+  };
+  esp_task_wdt_init(&wdt_config);
+  esp_task_wdt_add(NULL);  // Add current thread to WDT watch
+}
+
+void sendWOL() {
   WOL.sendMagicPacket(MAC_ADDR);
   delay(300);
 }
 
-// Functions for status command
-String formatMemory(uint32_t bytes)
-{
-  String result;
-
-  // Convert to different units if needed
-  if (bytes > 1024 * 1024)
-  {
-    float mb = bytes / (1024.0 * 1024.0);
-    result = String(mb, 2) + " MB";
-  }
-  else if (bytes > 1024)
-  {
-    float kb = bytes / 1024.0;
-    result = String(kb, 2) + " KB";
-  }
-  else
-  {
-    result = String(bytes) + " bytes";
-  }
-
-  return result;
-}
-
-String getSystemStatus()
-{
-  String status = "📊 System Status\n";
-  status += "━━━━━━━━━\n";
-  status += "🗃️ Memory: " + formatMemory(ESP.getFreeHeap()) + " / " + formatMemory(ESP.getHeapSize()) + "\n";
-  status += "📡 WiFi RSSI: " + String(WiFi.RSSI()) + " dBm\n";
+void sendSystemStatus(const String& chat_id) {
+  String status =
+    "📊 System Status\n"
+    "━━━━━━━━━\n";
+  status += "🗃️ Memory: " + String(ESP.getFreeHeap() / 1024.0, 1) + " / " + String(ESP.getHeapSize() / 1024.0, 1) + " KB\n";
+  status += "📡 RSSI: " + String(WiFi.RSSI()) + " dBm\n";
   status += "🌐 IP: " + WiFi.localIP().toString() + "\n";
-  status += "📝 SSID: " + String(WiFi.SSID()) + "\n";
-  return status;
+  status += "📝 SSID: " + WiFi.SSID();
+
+  bot.sendMessage(chat_id, status, "");
 }
 
-void handleNewMessages(int numNewMessages)
-{
-  for (int i = 0; i < numNewMessages; i++)
-  {
-    esp_task_wdt_reset(); // Reset watchdog timer while processing messages
+void handleNewMessages(int numNewMessages) {
+  for (int i = 0; i < numNewMessages; i++) {
+    esp_task_wdt_reset();
 
-    if (bot.messages[i].from_id != BOT_ALLOWED_ID)
-      continue;
+    if (String(BOT_ALLOWED_ID) != bot.messages[i].from_id) continue;
 
-    String chat_id = bot.messages[i].chat_id;
-    String text = bot.messages[i].text;
+    const String& chat_id = bot.messages[i].chat_id;
+    const String& text = bot.messages[i].text;
     String from_name = bot.messages[i].from_name;
-    if (from_name == "")
-      from_name = "Guest";
+    if (from_name.isEmpty()) {
+      from_name = F("Guest");
+    }
 
-    if (text == "/wol")
-    {
+    if (text == F("/wol")) {
       sendWOL();
-      bot.sendMessage(chat_id, "Magic Packet sent!", "");
-    }
-    else if (text == "/ping")
-    {
-      bot.sendMessage(chat_id, "Pong.", "");
-    }
-    else if (text == "/status")
-    {
-      bot.sendMessage(chat_id, getSystemStatus(), "");
-    }
-    else if (text == "/start" || text == "/help")
-    {
+      bot.sendMessage(chat_id, F("Magic Packet sent!"), "");
+    } else if (text == F("/ping")) {
+      bot.sendMessage(chat_id, F("Pong."), "");
+    } else if (text == F("/status")) {
+      sendSystemStatus(chat_id);
+    } else if (text == F("/start") || text == F("/help")) {
       String welcome = "Welcome to **WoL Bot**, " + from_name + ".\n";
-      welcome += "Use is restricted to the bot owner.\n\n";
-      welcome += "/wol : Send the Magic Packet\n";
-      welcome += "/status : Check the bot status\n";
-      welcome += "/ping : Pong.\n";
+      welcome += F("Use is restricted to the bot owner.\n\n");
+      welcome += F("/wol : Send the Magic Packet\n");
+      welcome += F("/status : Check the bot status\n");
+      welcome += F("/ping : Pong.");
       bot.sendMessage(chat_id, welcome, "Markdown");
     }
   }
 }
 
-void setup()
-{
+void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("Starting up...");
+  Serial.println(F("Starting up..."));
 
-  // Initialize LED pin
   pinMode(WIFI_LED_PIN, OUTPUT);
-  digitalWrite(WIFI_LED_PIN, LOW); // Start with LED off
+  digitalWrite(WIFI_LED_PIN, HIGH);
 
   // Initialize Watchdog
-  esp_task_wdt_config_t wdt_config = {
-      .timeout_ms = WDT_TIMEOUT,
-      .idle_core_mask = (1 << 0), // Monitor core 0 idle task
-      .trigger_panic = true       // Trigger panic handler on timeout
-  };
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL); // add current thread to WDT watch
+  setupWDT();
 
-  // Setup WiFi with retry
-  while (!setupWiFi())
-  {
+  while (!setupWiFi()) {
     delay(WIFI_RETRY_DELAY);
   }
 
   secured_client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
 
-  // Setup time with retry
-  while (!setupTime())
-  {
+  while (!setupTime()) {
     delay(WIFI_RETRY_DELAY);
   }
 }
 
-void loop()
-{
-  esp_task_wdt_reset(); // Reset watchdog timer
+void loop() {
+  esp_task_wdt_reset();
 
-  // Handle bot messages
-  if (millis() - bot_lasttime > BOT_MTBS)
-  {
-    bool shouldCheckMessages = true;
-
-    // Check WiFi first
-    if (WiFi.status() != WL_CONNECTED)
-    {
-      Serial.println("WiFi connection lost. Reconnecting...");
-      digitalWrite(WIFI_LED_PIN, LOW); // Turn off LED when connection is lost
+  if (millis() - bot_lasttime > BOT_MTBS) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println(F("WiFi connection lost. Reconnecting..."));
+      digitalWrite(WIFI_LED_PIN, HIGH);
       WiFi.disconnect();
-      shouldCheckMessages = setupWiFi(); // Only check messages if WiFi reconnection successful
-    }
-
-    // Check messages if WiFi is connected
-    if (shouldCheckMessages)
-    {
-      int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-      if (numNewMessages)
-      {
-        Serial.println("Response received");
-        handleNewMessages(numNewMessages);
+      if (!setupWiFi()) {
+        bot_lasttime = millis();
+        return;
       }
     }
 
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    if (numNewMessages) {
+      Serial.println(F("Response received"));
+      handleNewMessages(numNewMessages);
+    }
     bot_lasttime = millis();
   }
-
   delay(10);
 }
