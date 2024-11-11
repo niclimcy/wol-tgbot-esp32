@@ -18,7 +18,7 @@ const char BOT_ALLOWED_ID[] PROGMEM = "0000000000";
 const char MAC_ADDR[] PROGMEM = "XX:XX:XX:XX:XX:XX";
 
 // Constants
-constexpr uint8_t WIFI_LED_PIN = LED_BUILTIN; // Built-in LED on most ESP32 dev boards, change if using different pin
+constexpr uint8_t WIFI_LED_PIN = 8;  // Built-in LED on most ESP32 dev boards, change if using different pin
 constexpr uint8_t WDT_TIMEOUT = 60;
 constexpr uint16_t WIFI_RETRY_DELAY = 5000;
 constexpr uint16_t WIFI_TIMEOUT = 20000;
@@ -35,7 +35,7 @@ bool setupWiFi() {
   Serial.print(F("[WiFi] Connecting to "));
   Serial.println(WIFI_SSID);
 
-  digitalWrite(WIFI_LED_PIN, HIGH);
+  digitalWrite(WIFI_LED_PIN, LOW);
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -53,7 +53,7 @@ bool setupWiFi() {
 
   Serial.print(F("\nWiFi connected. IP address: "));
   Serial.println(WiFi.localIP());
-  digitalWrite(WIFI_LED_PIN, LOW);
+  digitalWrite(WIFI_LED_PIN, HIGH);
   return true;
 }
 
@@ -147,7 +147,6 @@ void setup() {
   Serial.println(F("Starting up..."));
 
   pinMode(WIFI_LED_PIN, OUTPUT);
-  digitalWrite(WIFI_LED_PIN, HIGH);
 
   // Initialize Watchdog
   setupWDT();
@@ -169,7 +168,6 @@ void loop() {
   if (millis() - bot_lasttime > BOT_MTBS) {
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println(F("WiFi connection lost. Reconnecting..."));
-      digitalWrite(WIFI_LED_PIN, HIGH);
       WiFi.disconnect();
       if (!setupWiFi()) {
         bot_lasttime = millis();
